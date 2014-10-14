@@ -16,6 +16,10 @@ my $baseEumURL;
 #appdynamics app key
 my $appKey;
 
+#the business transaction id
+my $bizTxID;
+my $currentBizTxTime;
+
 #UUID Generator
 my $ug  = UUID::Generator::PurePerl->new();
 
@@ -25,6 +29,7 @@ my $uri = URI::Encode->new( { encode_reserved => 0 } );
 #global ip list
 my @globalIP = ();
 my @globalCityList = ();
+my @urlList = ();
 
 #################
 #
@@ -49,6 +54,30 @@ my @globalCityList = ();
 #   em=1            End of Message.  Required.
 #
 ##################
+
+sub ingestURLList
+{
+    my $eumURL = shift;
+
+    if (isUndefined($eumURL)) {
+        displayUsage();
+        exit 1;
+    }
+    if (-f $eumURL) {
+        open IN, "<$eumURL" or die "Error opening Business Transaction List $eumURL: $!";
+
+        while (<IN>) {
+            chomp;
+
+            push @urlList, $_;
+        }
+
+        close IN;
+    }
+    else {
+        $urlList[0] = $eumURL;
+    }
+}
 
 sub ingestGlobalIPList
 {
@@ -249,6 +278,8 @@ sub getPageMetrics
     #response available = first byte - server conn time
     #$metricHash{'RAT'} = $metricHash{'FBT'} - $metricHash{'SCT'};
     
+    $currentBizTxTime = $metricHash{'FBT'} - $metricHash{'SCT'};
+    
     #html download time
     $metricHash{'DDT'} = getRnd(100, 500);
     
@@ -284,6 +315,19 @@ sub getPageMetrics
     #return "mn=%7BFET%3A1000%2CPRT%3A387%2CDRT%3A613%2CDOM%3A3639%2CPLT%3A5639%2CPLC%3A1%2C%7D";
 }
 
+sub getBizTxMetrics
+{
+    if (isUndefined ($bizTxID) )
+    {
+        return;
+    }
+    else {
+        my $metrics = getURIEncodedString("[bizTxID, ${currentBizTxTime}, ${currentBizTxTime}]");
+
+        return "btTime=$metrics";
+    }
+}    
+
 sub getEndOfMessage
 {
     return "em=1"
@@ -291,7 +335,7 @@ sub getEndOfMessage
 
 sub displayUsage
 {
-    print "\nSyntheticEum.pl --url <base-url> --key <eum-app-key>\n\n";
+    print "\nSyntheticEum.pl --url [<base-url> | <url-list.txt>] --key <eum-app-key>\n\n";
     exit 1;
 }
 
@@ -311,37 +355,55 @@ if ( isUndefined ($baseEumURL) || isUndefined ($appKey) )
 ingestGlobalIPList();
 ingestGlobalCityList();
 
+#read the BT lists
+ingestURLList($baseEumURL);
+
 my $beaconURI="http://col.eum-appdynamics.com/eumcollector/adrum.gif";
+
+if (scalar (@urlList) <= 0)
+{
+    die "\nError running SyntheticEum.pl, no URLs entered or found in input data file...\n\n";
+}
 
 for (my $i = 0; $i < 400; $i++) 
 {
-    my @beaconParams = ();
 
-    print "--------------------------\n\n";
+    foreach my $url (@urlList) {
+        my @beaconParams = ();
 
-    push (@beaconParams, getAppKey());
-    push (@beaconParams, getVR());
-    push (@beaconParams, getDataType());
-    push (@beaconParams, getGUUID());
-    push (@beaconParams, getPageURL($baseEumURL));
-    push (@beaconParams, getPageType());
-    #push (@beaconParams, getParentPageURL());
-    #push (@beaconParams, getParentPageType());
-    push (@beaconParams, getGeoInfo());
-    push (@beaconParams, getPageMetrics());
-    #push (@beaconParams, getCustomIP());
-    push (@beaconParams, getEndOfMessage());
+        print "--------------------------\n\n";
+        print "[URL] $url\n";
 
-    my $params = join ('&', @beaconParams);
+        push (@beaconParams, getAppKey());
+        push (@beaconParams, getVR());
+        push (@beaconParams, getDataType());
+        push (@beaconParams, getGUUID());
+        push (@beaconParams, getPageURL($url));
+        push (@beaconParams, getPageType());
+        #push (@beaconParams, getParentPageURL());
+        #push (@beaconParams, getParentPageType());
+        push (@beaconParams, getGeoInfo());
+        push (@beaconParams, getPageMetrics());
+        #push (@beaconParams, getCustomIP());
 
-    my $qualifiedURI="$beaconURI?$params";
+        my $bizTxMetrics = getBizTxMetrics();
 
-    print "Beacon URI: $qualifiedURI\n";
-    
-    my $rc = get($qualifiedURI);
-    
-    print "\n[RC ]  $rc\n";
-    print "\n---------------------------\n";
+        if (!isUndefined ($bizTxMetrics)) {
+            push (@beaconParams, getBizTxID());
+        }
+        push (@beaconParams, getEndOfMessage());
 
-    sleep 1;
+        my $params = join ('&', @beaconParams);
+
+        my $qualifiedURI="$beaconURI?$params";
+
+        print "[Beacon URI] $qualifiedURI\n";
+
+        my $rc = get($qualifiedURI);
+
+        print "\n[RC ]  $rc\n";
+        print "\n---------------------------\n";
+
+        sleep 1;
+    }
 }
